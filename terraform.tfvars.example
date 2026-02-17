@@ -1,0 +1,101 @@
+# Example Terraform Variables Configuration (Multi-Workspace Architecture)
+# Copy this file to terraform.tfvars and update with your specific values
+# 
+# IMPORTANT: Never commit terraform.tfvars to version control as it contains sensitive information
+# Add terraform.tfvars to your .gitignore file
+#
+# Architecture Overview:
+# - This configuration creates THREE Fabric workspaces: {prefix}-dev, {prefix}-test, {prefix}-prod
+# - Dev workspace: Direct Git sync to dev branch (automatic synchronization)
+# - Test workspace: Deployed via pipeline when merging to test branch (1 reviewer required)
+# - Prod workspace: Deployed via pipeline when merging to main branch (2 reviewers required)
+
+# Project Configuration
+project_name = "fabric-demo"
+owner_email  = "your.email@company.com"
+
+# Azure Configuration
+azure_location    = "East US 2"
+subscription_id   = "00000000-0000-0000-0000-000000000000"  # Replace with your subscription ID
+tenant_id        = "00000000-0000-0000-0000-000000000000"  # Replace with your tenant ID
+
+# Microsoft Fabric Multi-Workspace Configuration
+# A prefix is used to create three workspaces automatically
+workspace_prefix             = "FabricDemo"  # Creates: FabricDemo-dev, FabricDemo-test, FabricDemo-prod
+fabric_capacity_id          = "00000000-0000-0000-0000-000000000000"  # Replace with your Fabric capacity ID
+fabric_workspace_description = "Fabric workspace for"  # Will append: "Development", "Testing", "Production"
+
+# Optional: Override default environment configurations
+# Uncomment and modify if you need different settings than the defaults
+# environments = {
+#   dev = {
+#     workspace_suffix       = "dev"
+#     enable_git_integration = true          # Dev has direct Git sync
+#     git_branch_name        = "dev"
+#     description_suffix     = "Development"
+#     pr_min_reviewers       = 0             # No PR required for dev
+#   }
+#   test = {
+#     workspace_suffix       = "test"
+#     enable_git_integration = false         # Test uses pipeline deployment
+#     git_branch_name        = "test"
+#     description_suffix     = "Testing"
+#     pr_min_reviewers       = 1             # 1 reviewer required
+#   }
+#   prod = {
+#     workspace_suffix       = "prod"
+#     enable_git_integration = false         # Prod uses pipeline deployment
+#     git_branch_name        = "main"
+#     description_suffix     = "Production"
+#     pr_min_reviewers       = 2             # 2 reviewers required
+#   }
+# }
+
+# Azure DevOps Configuration  
+azuredevops_org_name           = "your-devops-org"  # Replace with your Azure DevOps organization name
+azuredevops_project_name       = "Fabric Demo Project"
+azuredevops_project_description = "Microsoft Fabric multi-workspace deployment and content management project"
+azuredevops_repository_name    = "fabric-workspace-content"
+
+# Git Integration Configuration (applies to dev workspace only by default)
+git_provider = "AzureDevOps"  # Options: AzureDevOps, GitHub
+
+# Enable Git Integration for Dev Workspace (Phased Deployment)
+# Set to false for initial deployment, then true after running init-repo-remote.ps1
+# This allows you to create workspaces first, then enable Git sync after branches are ready
+enable_dev_git_integration = false  # Change to true after branches and fabric-content folder exist
+
+# Pipeline Configuration
+create_deployment_pipeline = true  # Creates pipeline for test and prod deployments
+
+# Security and Access Configuration
+# These users will have access to ALL three workspaces (dev, test, prod)
+fabric_workspace_admin_users = [
+  "admin1@company.com",
+  "admin2@company.com"
+]
+fabric_workspace_member_users = [
+  "user1@company.com",
+  "user2@company.com"
+]
+
+# Resource Configuration
+enable_monitoring = true
+retention_days    = 30
+
+# Cost Management
+auto_pause_enabled = true  # Applies to development resources
+
+# Service Principal Configuration
+# Single service principal has admin access to all three workspaces
+service_principal_name = "sp-fabric-demo-multiworkspace"
+
+# Azure AD Group Configuration
+azure_ad_group_name    = "Fabric-Demo-ServicePrincipals"
+create_azure_ad_group  = true  # Set to false if group already exists
+
+# Deprecated Variables (kept for backward compatibility, not used in multi-workspace setup)
+# environment = "dev"  # All environments are created automatically
+# enable_git_integration = false  # Use environments map instead
+# pipeline_branch_name = "main"  # Use environments map instead
+# fabric_workspace_name = "My Workspace"  # Use workspace_prefix instead
