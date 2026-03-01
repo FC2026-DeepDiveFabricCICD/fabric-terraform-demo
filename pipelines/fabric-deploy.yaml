@@ -1,0 +1,253 @@
+# Microsoft Fabric Deployment Pipeline (Multi-Workspace)
+# Deploys Fabric items (Semantic Models, Reports, Notebooks, etc.) using fabric_cicd library
+# 
+# Architecture:
+# - Dev workspace: Direct Git sync (no pipeline deployment needed)
+# - Test workspace: Deployed via pipeline on test branch
+# - Prod workspace: Deployed via pipeline on main branch
+#
+# Triggers:
+# - Dev branch: Changes to fabric-content/ (for pipeline testing only, actual deployment via Git sync)
+# - Test branch: Changes to fabric-content/ (deploys to test workspace)
+# - Main branch: Changes to fabric-content/ (deploys to prod workspace)
+#
+# Prerequisites:
+# - Variable groups: Fabric-Deployment-dev, Fabric-Deployment-test, Fabric-Deployment-prod
+# - Service principal with admin access to all workspaces
+# - fabric_cicd library available on PyPI
+# - Branch policies: test (1 reviewer), main (2 reviewers)
+
+trigger:
+  branches:
+    include:
+      - test
+      - main
+  paths:
+    include:
+      - fabric-content/*
+
+pr: none  # Don't run on PRs, only on merges
+
+# Variable group is loaded dynamically based on branch name
+variables:
+- name: vmImage
+  value: 'ubuntu-latest'
+- name: pythonVersion 
+  value: '3.11'
+
+pool:
+  vmImage: $(vmImage)
+
+stages:
+- stage: DetectEnvironment
+  displayName: 'Detect Target Environment'
+  jobs:
+  - job: DetectEnv
+    displayName: 'Map Branch to Environment'
+    steps:
+    - script: |
+        BRANCH_NAME="$(Build.SourceBranchName)"
+        echo "Source branch: $BRANCH_NAME"
+        
+        # Map branch name to environment
+        if [ "$BRANCH_NAME" = "dev" ]; then
+          DEPLOY_ENV="dev"
+        elif [ "$BRANCH_NAME" = "test" ]; then
+          DEPLOY_ENV="test"
+        elif [ "$BRANCH_NAME" = "main" ]; then
+          DEPLOY_ENV="prod"
+        else
+          echo "##vso[task.logissue type=error]Unknown branch: $BRANCH_NAME. Expected dev, test, or main."
+          exit 1
+        fi
+        
+        echo "Target environment: $DEPLOY_ENV"
+        echo "##vso[task.setvariable variable=DEPLOY_ENV;isOutput=true]$DEPLOY_ENV"
+      displayName: 'Detect Environment from Branch'
+      name: DetectStep
+
+- stage: DeployFabric
+  displayName: 'Deploy to Fabric Workspace'
+  dependsOn: DetectEnvironment
+  variables:
+    # Load all three variable groups - deployment script will use the correct one based on DEPLOY_ENV
+    - name: DEPLOY_ENV
+      value: $[ stageDependencies.DetectEnvironment.DetectEnv.outputs['DetectStep.DEPLOY_ENV'] ]
+    - group: Fabric-Deployment-dev
+    - group: Fabric-Deployment-test
+    - group: Fabric-Deployment-prod
+  jobs:
+  - job: Deploy
+    displayName: 'Deploy Fabric Items'
+    
+    steps:
+    - checkout: self
+      persistCredentials: true
+      displayName: 'Checkout Repository'
+    
+    - task: UsePythonVersion@0
+      displayName: 'Use Python $(pythonVersion)'
+      inputs:
+        versionSpec: '$(pythonVersion)'
+        addToPath: true
+    
+    - script: |
+        python -m pip install --upgrade pip
+        pip install fabric-cicd azure-identity
+      displayName: 'Install Dependencies'
+    
+    - script: |
+        python - << 'EOF'
+        """
+        Microsoft Fabric Deployment using fabric_cicd library
+        
+        Deploys Fabric items (Semantic Models, Reports, Notebooks, etc.) 
+        from the repository to a Fabric workspace.
+        """
+        import sys
+        import os
+        from pathlib import Path
+
+        from azure.identity import ClientSecretCredential
+        from fabric_cicd import FabricWorkspace, publish_all_items, unpublish_all_orphan_items, change_log_level
+
+
+        def main():
+            """Main deployment function."""
+            
+            # Force unbuffered output for real-time logging in pipelines
+            sys.stdout.reconfigure(line_buffering=True, write_through=True)
+            sys.stderr.reconfigure(line_buffering=True, write_through=True)
+            
+            # Enable debugging if SYSTEM_DEBUG is set in Azure DevOps pipeline
+            if os.getenv("SYSTEM_DEBUG", "false").lower() == "true":
+                change_log_level("DEBUG")
+                print("[DEBUG] Debug logging enabled")
+            
+            print("=" * 70)
+            print("Microsoft Fabric Deployment using fabric_cicd")
+            print("=" * 70)
+            
+            # Get environment from DEPLOY_ENV variable 
+            environment = os.getenv("DEPLOY_ENV", "test")
+            env_upper = environment.upper()
+            
+            print(f"Target Environment: {environment} (loading {env_upper} variables)")
+            
+            # Get environment-specific variables
+            # Variable names are suffixed with environment (e.g., FABRIC_WORKSPACE_ID_TEST)
+            # This prevents conflicts when multiple variable groups are loaded
+            workspace_id = os.getenv(f"FABRIC_WORKSPACE_ID_{env_upper}")
+            client_id = os.getenv(f"SERVICE_PRINCIPAL_ID_{env_upper}")
+            client_secret = os.getenv(f"SERVICE_PRINCIPAL_SECRET_{env_upper}")
+            tenant_id = os.getenv(f"AZURE_TENANT_ID_{env_upper}")
+            
+            # Validate required variables
+            missing = []
+            if not workspace_id: missing.append(f"FABRIC_WORKSPACE_ID_{env_upper}")
+            if not client_id: missing.append(f"SERVICE_PRINCIPAL_ID_{env_upper}")
+            if not client_secret: missing.append(f"SERVICE_PRINCIPAL_SECRET_{env_upper}")
+            if not tenant_id: missing.append(f"AZURE_TENANT_ID_{env_upper}")
+            
+            if missing:
+                print(f"[ERROR] Missing required environment variables: {', '.join(missing)}")
+                return 1
+            
+            print(f"Environment: {environment}")
+            print(f"Workspace ID: {workspace_id}")
+            print(f"Tenant ID: {tenant_id}")
+            print(f"Client ID: {client_id}")
+            print("=" * 70)
+            
+            # Set repository directory (fabric-content folder)
+            # In Azure DevOps, we're at the repository root
+            repository_directory = str(Path.cwd() / "fabric-content")
+            
+            if not Path(repository_directory).exists():
+                print(f"[ERROR] Repository directory not found: {repository_directory}")
+                return 1
+            
+            print(f"Repository directory: {repository_directory}")
+            
+            # Define item types to deploy
+            # Adjust based on what you have in your fabric-content folder
+            item_type_in_scope = [
+                "SemanticModel",
+                "Report", 
+                "Notebook",
+                "DataPipeline",
+                "Environment",
+                "Lakehouse",
+                "Warehouse"
+            ]
+            
+            print(f"Item types in scope: {', '.join(item_type_in_scope)}")
+            print()
+            
+            try:
+                # Authenticate using service principal
+                print("[AUTH] Authenticating with service principal...")
+                token_credential = ClientSecretCredential(
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    tenant_id=tenant_id
+                )
+                print("[OK] Authentication credential created")
+                
+                # Initialize Fabric workspace
+                print(f"\n[INIT] Initializing Fabric workspace connection...")
+                target_workspace = FabricWorkspace(
+                    workspace_id=workspace_id,
+                    environment=environment,
+                    repository_directory=repository_directory,
+                    item_type_in_scope=item_type_in_scope,
+                    token_credential=token_credential,
+                )
+                print("[OK] Workspace connection established")
+                
+                # Publish all items from repository
+                print(f"\n[DEPLOY] Publishing items from repository...")
+                publish_all_items(target_workspace)
+                print("[OK] Items published successfully")
+                
+                # Unpublish orphan items (items in workspace but not in repository)
+                print(f"\n[CLEANUP] Unpublishing orphan items...")
+                unpublish_all_orphan_items(target_workspace)
+                print("[OK] Orphan items removed")
+                
+                print("\n" + "=" * 70)
+                print("[SUCCESS] Fabric workspace deployment completed!")
+                print("=" * 70)
+                return 0
+                
+            except Exception as e:
+                print(f"\n[ERROR] Deployment failed: {e}")
+                import traceback
+                traceback.print_exc()
+                return 1
+
+
+        if __name__ == "__main__":
+            sys.exit(main())
+        EOF
+      displayName: 'Deploy to Fabric Workspace'
+      env:
+        # Environment indicator - determines which variables to use
+        DEPLOY_ENV: $(DEPLOY_ENV)
+        # Dev environment variables
+        FABRIC_WORKSPACE_ID_DEV: $(FABRIC_WORKSPACE_ID_DEV)
+        SERVICE_PRINCIPAL_ID_DEV: $(SERVICE_PRINCIPAL_ID_DEV)
+        SERVICE_PRINCIPAL_SECRET_DEV: $(SERVICE_PRINCIPAL_SECRET_DEV)
+        AZURE_TENANT_ID_DEV: $(AZURE_TENANT_ID_DEV)
+        # Test environment variables
+        FABRIC_WORKSPACE_ID_TEST: $(FABRIC_WORKSPACE_ID_TEST)
+        SERVICE_PRINCIPAL_ID_TEST: $(SERVICE_PRINCIPAL_ID_TEST)
+        SERVICE_PRINCIPAL_SECRET_TEST: $(SERVICE_PRINCIPAL_SECRET_TEST)
+        AZURE_TENANT_ID_TEST: $(AZURE_TENANT_ID_TEST)
+        # Prod environment variables
+        FABRIC_WORKSPACE_ID_PROD: $(FABRIC_WORKSPACE_ID_PROD)
+        SERVICE_PRINCIPAL_ID_PROD: $(SERVICE_PRINCIPAL_ID_PROD)
+        SERVICE_PRINCIPAL_SECRET_PROD: $(SERVICE_PRINCIPAL_SECRET_PROD)
+        AZURE_TENANT_ID_PROD: $(AZURE_TENANT_ID_PROD)
+        # Debug flag
+        SYSTEM_DEBUG: $(System.Debug)
